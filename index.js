@@ -57,45 +57,80 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 	const width = Math.floor(elWidth / charWidth),
 		height = Math.floor(elHeight / charHeight)
 
-	/** @type {Map<RenderFn, { text: string, children: Map<string, RenderFn> }} */
-	const cache = new Map()
+	/** @type {Component} */
+	let cache
 
 	/**
-	 * @param {RenderFn} f
-	 * @param {number} width
-	 * @param {number} height
+	 * @param {RenderOptions} options
+	 * @param {Component=} cache
+	 * @returns {Component}
 	 */
-	function render(f, width, height) {
-		/** @type {Map<string, RenderFn>} */
-		let children = new Map()
-		let nextChar = 0xd7ff
-		let text = f({
-			width,
-			height,
-			registerChild(childFn) {
-				const char = String.fromCharCode(nextChar++)
-				children.set(char, childFn)
-				return char
-			},
-			invalidate() {
-				cache.delete(f)
-				requestAnimationFrame(renderToDom)
-			},
-		})
-		// cache.set(f, { text, children })
+	function render(options, cache) {
+		if (!cache || cache.dirty) {
+			/** @type {[string, RenderFn][]} */
+			let childFns = []
+			let nextChar = 0xd800
 
-		for (const [char, f] of children.entries()) {
-			const dimensions = extractDimensions(char, text, width)
-			text = insertComp(char, text, render(f, ...dimensions))
+			/** @type {Component} */
+			const component = {
+				text: "",
+				children: [],
+				dirty: false,
+				...options,
+			}
+
+			component.text = component.render({
+				width: component.width,
+				height: component.height,
+				registerChild(childFn) {
+					if (component.text)
+						throw new Error("Cannot register new children after the component has been rendered")
+					const char = String.fromCharCode(nextChar++)
+					childFns.push([char, childFn])
+					return char
+				},
+				invalidate() {
+					component.dirty = true
+					scheduleRender()
+				},
+			})
+
+			component.children = childFns.map(([char, f]) => {
+				const [width, height] = extractDimensions(char, component)
+				return [char, render({ height, width, render: f })]
+			})
+
+			return component
+		} else {
+			cache.children = cache.children.map(([char, child]) => [
+				char,
+				render(
+					{
+						width: child.width,
+						height: child.height,
+						render: child.render,
+					},
+					child,
+				),
+			])
+			return cache
 		}
-		return text
 	}
 
 	/** @type {RenderFn} */
 	let root
+
 	function renderToDom() {
-		const final = render(root, width, height)
+		rafId = 0
+		cache = render({ width, height, render: root }, cache)
+		const final = collapseTree(cache)
 		pre.innerHTML = insertNewlines(final, width, height)
+	}
+
+	/** @type {number} */
+	let rafId = 0
+	function scheduleRender() {
+		if (!rafId) rafId = requestAnimationFrame(renderToDom)
 	}
 
 	return (
@@ -109,29 +144,40 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 
 /**
  * @param {string} char
- * @param {string} str
- * @param {number} parentWidth
+ * @param {Component} component
+ * @returns {[number, number]}
  */
-function extractDimensions(char, str, parentWidth) {
+function extractDimensions(char, { text, width }) {
 	const re = new RegExp(`(${char}+)`, "mg")
 	let match,
 		w,
 		h = 0
 
-	while ((match = re.exec(str))) {
+	while ((match = re.exec(text))) {
 		h++
 		let l = match[1].length
 		if (!w) w = l
 		if (l != w) throw new Error(`Irregular shape detected for child with placeholder: "${char}"`)
 	}
 
-	if (h == 1 && w > parentWidth) {
+	if (h == 1 && w > width) {
 		// it's not one long line it's a big block
-		h = Math.floor(w / parentWidth)
-		w = parentWidth
+		h = Math.floor(w / width)
+		w = width
 	}
 
 	return [w, h]
+}
+
+/**
+ * @param {Component} comp
+ */
+function collapseTree(comp) {
+	let text = comp.text
+	for (const [char, child] of comp.children) {
+		text = insertComp(char, text, collapseTree(child))
+	}
+	return text
 }
 
 /**
@@ -163,7 +209,22 @@ function insertNewlines(str, width, height) {
 	return acc.join("\n")
 }
 
-/** @typedef {() => RenderFn} Component */
+/**
+ * @typedef {Object} Component
+ * @property {string} text
+ * @property {RenderFn} render
+ * @property {[string, Component][]} children
+ * @property {boolean} dirty
+ * @property {number} width
+ * @property {number} height
+ */
+
+/**
+ * @typedef {Object} RenderOptions
+ * @property {RenderFn} render
+ * @property {number} width
+ * @property {number} height
+ */
 
 /** @typedef {(context: Context) => string} RenderFn */
 
