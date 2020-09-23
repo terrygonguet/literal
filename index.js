@@ -1,22 +1,44 @@
 /**
+ * @typedef {Object} Component
+ * @property {string} text
+ * @property {RenderFn} render
+ * @property {Map<string, Component>} children
+ * @property {boolean} dirty
+ * @property {number} width
+ * @property {number} height
+ * @property {Map<string, Array<() => void>>} hooks
+ */
+
+/**
+ * @typedef {Object} RenderOptions
+ * @property {RenderFn} render
+ * @property {number} width
+ * @property {number} height
+ */
+
+/** @typedef {(context: Context) => string} RenderFn */
+
+/**
+ * @typedef {Object} Context
+ * @property {number} width
+ * @property {number} height
+ * @property {(f: RenderFn) => string} registerChild
+ * @property {() => void} invalidate
+ * @property {(key: string, f: () => void) => void} registerHook
+ * @property {(key: Object, f: (e: Event) => void) => HTMLInputElement} registerInput
+ */
+
+/**
  * @param {string|HTMLElement} selectorOrEl
  * @param {Object} options
  * @param {string} options.fontFamily Defaults to "monospace, monospace", REALLY should be monospace
  */
-export default async function literal(
-	selectorOrEl,
-	{ fontFamily = "monospace, monospace" } = {},
-) {
+export default async function literal(selectorOrEl, { fontFamily = "monospace, monospace" } = {}) {
 	/** @type {HTMLElement} */
-	const el =
-		typeof selectorOrEl == "string"
-			? document.querySelector(selectorOrEl)
-			: selectorOrEl
-	if (!el || !el instanceof HTMLElement)
-		throw new Error(`Invalid element or css selector supplied`)
+	const el = typeof selectorOrEl == "string" ? document.querySelector(selectorOrEl) : selectorOrEl
+	if (!el || !el instanceof HTMLElement) throw new Error(`Invalid element or css selector supplied`)
 
-	if (el.children.length)
-		throw new Error("The supplied element should be empty")
+	if (el.children.length) throw new Error("The supplied element should be empty")
 
 	const { width: elWidth, height: elHeight } = el.getBoundingClientRect()
 	const id = Math.random().toString(36).slice(2)
@@ -35,14 +57,13 @@ export default async function literal(
 			left: 50%;
 			transform: translate(-50%, -50%);
 		}
-		#lit-${id}-meter {
+		#lit-${id}-meter, input.lit-${id} {
 			position: absolute;
 			width: auto;
 			height: auto;
 			font-family: ${fontFamily};
-			visibility: hidden;
-			top: 0;
-			left: 0;
+			top: -1000000px;
+			left: -1000000px;
 		}`
 	document.head.appendChild(styles)
 
@@ -57,12 +78,9 @@ export default async function literal(
 	pre.appendChild(meter)
 
 	// wait a frame to get a stable measurement
-	await new Promise((resolve) => requestAnimationFrame(resolve))
+	await new Promise(resolve => requestAnimationFrame(resolve))
 
-	const {
-		width: charWidth,
-		height: charHeight,
-	} = meter.getBoundingClientRect()
+	const { width: charWidth, height: charHeight } = meter.getBoundingClientRect()
 	meter.remove()
 
 	const width = Math.floor(elWidth / charWidth),
@@ -71,6 +89,24 @@ export default async function literal(
 	/** @type {Component} */
 	let cache
 
+	// /** @type {WeakMap<Component, Array<() => void>} */
+	// const keydownHandlers = new WeakMap()
+
+	/** @type {Map<Object, [HTMLInputElement, () => void]>} */
+	const inputEls = new Map()
+
+	// TODO: less naive implementation
+	document.addEventListener("keydown", e => {
+		if (!cache) return
+		const f =
+			/** @param {Component} comp */
+			comp => {
+				triggerHook(comp, "keydown", e)
+				comp.children.forEach(child => f(child))
+			}
+		f(cache)
+	})
+
 	/**
 	 * @param {RenderOptions} options
 	 * @param {Component=} cache
@@ -78,15 +114,18 @@ export default async function literal(
 	 */
 	function render(options, cache) {
 		if (!cache || cache.dirty) {
-			/** @type {[string, RenderFn][]} */
-			let childFns = []
+			cache && triggerHook(cache, "beforeupdate")
+
+			/** @type {Map<string, RenderFn>} */
+			let childFns = new Map()
 			let nextChar = 0xd800
 
 			/** @type {Component} */
 			const component = {
 				text: "",
-				children: [],
+				children: new Map(),
 				dirty: false,
+				hooks: new Map(),
 				...options,
 			}
 
@@ -95,37 +134,49 @@ export default async function literal(
 				height: component.height,
 				registerChild(childFn) {
 					if (component.text)
-						throw new Error(
-							"Cannot register new children after the component has been rendered",
-						)
+						throw new Error("Cannot register new children after the component has been rendered")
 					const char = String.fromCharCode(nextChar++)
-					childFns.push([char, childFn])
+					childFns.set(char, childFn)
 					return char
 				},
 				invalidate() {
 					component.dirty = true
 					scheduleRender()
 				},
+				registerHook: (key, f) => addHook(component, key, f),
+				registerInput(key, f) {
+					// const [inpt, old] = inputEls.get(key) ?? [document.createElement("input"), f]
+					// inpt.classList.add("lit-" + id)
+					// inpt.removeEventListener("input", old)
+					// inpt.addEventListener("input", f)
+					// inpt.tabIndex = 1
+					// document.body.append(inpt)
+					// inputEls.set(key, [inpt, f])
+					// return inpt
+				},
 			})
 
-			component.children = childFns.map(([char, f]) => {
+			for (const [char, f] of childFns.entries()) {
 				const [width, height] = extractDimensions(char, component)
-				return [char, render({ height, width, render: f })]
-			})
+				component.children.set(char, render({ height, width, render: f }))
+			}
 
 			return component
 		} else {
-			cache.children = cache.children.map(([char, child]) => [
-				char,
-				render(
-					{
-						width: child.width,
-						height: child.height,
-						render: child.render,
-					},
-					child,
-				),
-			])
+			for (const [char, child] of cache.children.entries()) {
+				cache.children.set(
+					char,
+					render(
+						{
+							width: child.width,
+							height: child.height,
+							render: child.render,
+						},
+						child,
+					),
+				)
+			}
+
 			return cache
 		}
 	}
@@ -148,11 +199,31 @@ export default async function literal(
 
 	return (
 		/** @param {RenderFn} f */
-		(f) => {
+		f => {
 			root = f
 			requestAnimationFrame(renderToDom)
 		}
 	)
+}
+
+/**
+ * @param {Component} component
+ * @param {string} key
+ * @param {() => void} f
+ */
+function addHook(component, key, f) {
+	const arr = component.hooks.get(key)
+	if (arr) arr.push(f)
+	else component.hooks.set(key, [f])
+}
+
+/**
+ * @param {Component} component
+ * @param {string} key
+ * @param {any[]} args
+ */
+function triggerHook(component, key, ...args) {
+	component.hooks.get(key)?.forEach(f => f(...args))
 }
 
 /**
@@ -170,10 +241,7 @@ function extractDimensions(char, { text, width }) {
 		h++
 		let l = match[1].length
 		if (!w) w = l
-		if (l != w)
-			throw new Error(
-				`Irregular shape detected for child with placeholder: "${char}"`,
-			)
+		if (l != w) throw new Error(`Irregular shape detected for child with placeholder: "${char}"`)
 	}
 
 	if (h == 1 && w > width) {
@@ -224,30 +292,3 @@ function insertNewlines(str, width, height) {
 	}
 	return acc.join("\n")
 }
-
-/**
- * @typedef {Object} Component
- * @property {string} text
- * @property {RenderFn} render
- * @property {[string, Component][]} children
- * @property {boolean} dirty
- * @property {number} width
- * @property {number} height
- */
-
-/**
- * @typedef {Object} RenderOptions
- * @property {RenderFn} render
- * @property {number} width
- * @property {number} height
- */
-
-/** @typedef {(context: Context) => string} RenderFn */
-
-/**
- * @typedef {Object} Context
- * @prop {number} width
- * @prop {number} height
- * @prop {(f: RenderFn) => string} registerChild
- * @prop {() => void} invalidate
- */
