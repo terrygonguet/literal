@@ -1,14 +1,22 @@
 /**
  * @param {string|HTMLElement} selectorOrEl
  * @param {Object} options
- * @param {string} options.fontFamily Defaults to "Consolas", REALLY should be monospace
+ * @param {string} options.fontFamily Defaults to "monospace, monospace", REALLY should be monospace
  */
-export default async function literal(selectorOrEl, { fontFamily = "Consolas" } = {}) {
+export default async function literal(
+	selectorOrEl,
+	{ fontFamily = "monospace, monospace" } = {},
+) {
 	/** @type {HTMLElement} */
-	const el = typeof selectorOrEl == "string" ? document.querySelector(selectorOrEl) : selectorOrEl
-	if (!el || !el instanceof HTMLElement) throw new Error(`Invalid element or css selector supplied`)
+	const el =
+		typeof selectorOrEl == "string"
+			? document.querySelector(selectorOrEl)
+			: selectorOrEl
+	if (!el || !el instanceof HTMLElement)
+		throw new Error(`Invalid element or css selector supplied`)
 
-	if (el.children.length) throw new Error("The supplied element should be empty")
+	if (el.children.length)
+		throw new Error("The supplied element should be empty")
 
 	const { width: elWidth, height: elHeight } = el.getBoundingClientRect()
 	const id = Math.random().toString(36).slice(2)
@@ -20,7 +28,7 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 			height: auto;
 			margin: 0;
 			padding: 0;
-			font-family: "${fontFamily}";
+			font-family: ${fontFamily};
 			position: relative;
 			user-select: none;
 			top: 50%;
@@ -31,7 +39,7 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 			position: absolute;
 			width: auto;
 			height: auto;
-			font-family: "${fontFamily}";
+			font-family: ${fontFamily};
 			visibility: hidden;
 			top: 0;
 			left: 0;
@@ -49,9 +57,12 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 	pre.appendChild(meter)
 
 	// wait a frame to get a stable measurement
-	await new Promise(resolve => requestAnimationFrame(resolve))
+	await new Promise((resolve) => requestAnimationFrame(resolve))
 
-	const { width: charWidth, height: charHeight } = meter.getBoundingClientRect()
+	const {
+		width: charWidth,
+		height: charHeight,
+	} = meter.getBoundingClientRect()
 	meter.remove()
 
 	const width = Math.floor(elWidth / charWidth),
@@ -84,7 +95,9 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 				height: component.height,
 				registerChild(childFn) {
 					if (component.text)
-						throw new Error("Cannot register new children after the component has been rendered")
+						throw new Error(
+							"Cannot register new children after the component has been rendered",
+						)
 					const char = String.fromCharCode(nextChar++)
 					childFns.push([char, childFn])
 					return char
@@ -135,7 +148,7 @@ export default async function literal(selectorOrEl, { fontFamily = "Consolas" } 
 
 	return (
 		/** @param {RenderFn} f */
-		f => {
+		(f) => {
 			root = f
 			requestAnimationFrame(renderToDom)
 		}
@@ -157,7 +170,10 @@ function extractDimensions(char, { text, width }) {
 		h++
 		let l = match[1].length
 		if (!w) w = l
-		if (l != w) throw new Error(`Irregular shape detected for child with placeholder: "${char}"`)
+		if (l != w)
+			throw new Error(
+				`Irregular shape detected for child with placeholder: "${char}"`,
+			)
 	}
 
 	if (h == 1 && w > width) {
