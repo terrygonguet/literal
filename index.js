@@ -22,10 +22,16 @@
  * @typedef {Object} Context
  * @property {number} width
  * @property {number} height
- * @property {(f: RenderFn) => string} registerChild
+ * @property {(renderFn: RenderFn) => string} registerChild
  * @property {() => void} invalidate
- * @property {(key: string, f: () => void) => void} registerHook
- * @property {(key: Object, f: (e: Event) => void) => HTMLInputElement} registerInput
+ * @property {(key: string, callback: () => any) => void} registerHook
+ * @property {(key: Object, callback: (e: KeyboardEvent) => any, options: RegisterInputOptions) => string} registerInput
+ */
+
+/**
+ * @typedef {Object} RegisterInputOptions
+ * @property {boolean=} multiline
+ * @property {(focus: boolean) => any=} onFocusChange
  */
 
 /**
@@ -57,13 +63,13 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 			left: 50%;
 			transform: translate(-50%, -50%);
 		}
-		#lit-${id}-meter, input.lit-${id} {
+		#lit-${id}-meter {
 			position: absolute;
 			width: auto;
 			height: auto;
 			font-family: ${fontFamily};
-			top: -1000000px;
-			left: -1000000px;
+			top: 0px;
+			left: 0px;
 		}`
 	document.head.appendChild(styles)
 
@@ -81,7 +87,6 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 	await new Promise(resolve => requestAnimationFrame(resolve))
 
 	const { width: charWidth, height: charHeight } = meter.getBoundingClientRect()
-	meter.remove()
 
 	const width = Math.floor(elWidth / charWidth),
 		height = Math.floor(elHeight / charHeight)
@@ -89,23 +94,71 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 	/** @type {Component} */
 	let cache
 
-	// /** @type {WeakMap<Component, Array<() => void>} */
-	// const keydownHandlers = new WeakMap()
+	/** @type {Map<Object, string>} */
+	const inputs = new Map()
 
-	/** @type {Map<Object, [HTMLInputElement, () => void]>} */
-	const inputEls = new Map()
+	/** @type {Object} */
+	let activeInput
 
 	// TODO: less naive implementation
 	document.addEventListener("keydown", e => {
-		if (!cache) return
-		const f =
-			/** @param {Component} comp */
-			comp => {
-				triggerHook(comp, "keydown", e)
-				comp.children.forEach(child => f(child))
-			}
-		f(cache)
+		if (e.key == "Tab") {
+			const keys = Array.from(inputs.keys())
+			const i = keys.indexOf(activeInput)
+			if (i == -1 || i == keys.length - 1) activeInput = keys[0]
+			else activeInput = keys[i + 1]
+			if (cache) triggerRecursively(cache, "focuschange")
+		}
+		if (cache) triggerRecursively(cache, "keydown", e)
 	})
+
+	/**
+	 * @param {Component} component
+	 * @param {Map<string, RenderFn>} childFns
+	 * @returns {Context}
+	 */
+	function makeContext(component, childFns) {
+		let nextChar = 0xd800
+		return {
+			width: component.width,
+			height: component.height,
+			registerChild(childFn) {
+				if (component.text)
+					throw new Error("Cannot register new children after the component has been rendered")
+				const char = String.fromCharCode(nextChar++)
+				childFns.set(char, childFn)
+				return char
+			},
+			invalidate() {
+				component.dirty = true
+				scheduleRender()
+			},
+			registerHook: (key, callback) => addHook(component, key, callback),
+			registerInput(key, callback, { onFocusChange, multiline = false } = {}) {
+				let inputText = inputs.get(key) ?? ""
+				if (!inputText) inputs.set(key, "")
+				if (!activeInput) activeInput = key
+				onFocusChange?.(activeInput == key)
+				onFocusChange && addHook(component, "focuschange", () => onFocusChange(activeInput == key))
+				addHook(
+					component,
+					"keydown",
+					/** @param {KeyboardEvent} e */
+					e => {
+						if (activeInput != key) return
+						e.preventDefault()
+						// TODO: do that properly lol
+						if (e.key.length == 1) inputText += e.key
+						else if (e.key == "Backspace") inputText = inputText.slice(0, -1)
+						else if (e.key == "Enter" && multiline) inputText += "\n"
+						callback(e)
+						inputs.set(key, inputText)
+					},
+				)
+				return inputText
+			},
+		}
+	}
 
 	/**
 	 * @param {RenderOptions} options
@@ -118,7 +171,6 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 
 			/** @type {Map<string, RenderFn>} */
 			let childFns = new Map()
-			let nextChar = 0xd800
 
 			/** @type {Component} */
 			const component = {
@@ -129,32 +181,7 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 				...options,
 			}
 
-			component.text = component.render({
-				width: component.width,
-				height: component.height,
-				registerChild(childFn) {
-					if (component.text)
-						throw new Error("Cannot register new children after the component has been rendered")
-					const char = String.fromCharCode(nextChar++)
-					childFns.set(char, childFn)
-					return char
-				},
-				invalidate() {
-					component.dirty = true
-					scheduleRender()
-				},
-				registerHook: (key, f) => addHook(component, key, f),
-				registerInput(key, f) {
-					// const [inpt, old] = inputEls.get(key) ?? [document.createElement("input"), f]
-					// inpt.classList.add("lit-" + id)
-					// inpt.removeEventListener("input", old)
-					// inpt.addEventListener("input", f)
-					// inpt.tabIndex = 1
-					// document.body.append(inpt)
-					// inputEls.set(key, [inpt, f])
-					// return inpt
-				},
-			})
+			component.text = component.render(makeContext(component, childFns))
 
 			for (const [char, f] of childFns.entries()) {
 				const [width, height] = extractDimensions(char, component)
@@ -187,8 +214,8 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 	function renderToDom() {
 		rafId = 0
 		cache = render({ width, height, render: root }, cache)
-		const final = collapseTree(cache)
-		pre.innerHTML = insertNewlines(final, width, height)
+		const final = insertNewlines(collapseTree(cache), width, height)
+		pre.innerHTML = sanitize(final)
 	}
 
 	/** @type {number} */
@@ -209,7 +236,7 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 /**
  * @param {Component} component
  * @param {string} key
- * @param {() => void} f
+ * @param {() => any} f
  */
 function addHook(component, key, f) {
 	const arr = component.hooks.get(key)
@@ -274,7 +301,9 @@ function insertComp(char, parent, child) {
 	let match
 	while ((match = re.exec(parent))) {
 		let w = match[1].length
-		parent = parent.replace(match[1], child.slice(0, w))
+		// last param to String.replace has to be a function or it does some stupid stuff on some inputs
+		// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/replace#Specifying_a_string_as_a_parameter
+		parent = parent.replace(match[1], () => child.slice(0, w))
 		child = child.slice(w)
 	}
 	return parent
@@ -291,4 +320,32 @@ function insertNewlines(str, width, height) {
 		acc.push(str.slice(i * width, (i + 1) * width))
 	}
 	return acc.join("\n")
+}
+
+/**
+ * Original code from https://github.com/WebReflection/html-escaper
+ * @param {string} str
+ */
+function sanitize(str) {
+	const chars = /[&<>'"]/g
+
+	const entities = {
+		"&": "&amp;",
+		"<": "&lt;",
+		">": "&gt;",
+		"'": "&#39;",
+		'"': "&quot;",
+	}
+
+	return str.replace(chars, match => entities[match])
+}
+
+/**
+ * @param {Component} comp
+ * @param {string} event
+ * @param {any[]} args
+ */
+function triggerRecursively(comp, event, ...args) {
+	triggerHook(comp, event, ...args)
+	comp.children.forEach(child => triggerRecursively(child, event, ...args))
 }
