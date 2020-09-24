@@ -46,7 +46,6 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 
 	if (el.children.length) throw new Error("The supplied element should be empty")
 
-	const { width: elWidth, height: elHeight } = el.getBoundingClientRect()
 	const id = Math.random().toString(36).slice(2)
 
 	const styles = document.createElement("style")
@@ -78,6 +77,8 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 	pre.id = "lit-" + id
 	el.appendChild(pre)
 
+	const { width: elWidth, height: elHeight } = el.getBoundingClientRect()
+
 	const meter = document.createElement("div")
 	meter.id = `lit-${id}-meter`
 	meter.innerText = "@"
@@ -87,9 +88,22 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 	await new Promise(resolve => requestAnimationFrame(resolve))
 
 	const { width: charWidth, height: charHeight } = meter.getBoundingClientRect()
+	meter.remove()
 
-	const width = Math.floor(elWidth / charWidth),
+	let width = Math.floor(elWidth / charWidth),
 		height = Math.floor(elHeight / charHeight)
+
+	if ("ResizeObserver" in window) {
+		const observer = new ResizeObserver(entries => {
+			for (const entry of entries) {
+				cache = undefined
+				width = Math.floor(entry.contentRect.width / charWidth)
+				height = Math.floor(entry.contentRect.height / charHeight)
+			}
+			scheduleRender()
+		})
+		observer.observe(el)
+	}
 
 	/** @type {Component} */
 	let cache

@@ -1,9 +1,6 @@
 {
 	"compilerOptions": {
-		"lib": [
-			"ES2019",
-			"DOM"
-		] /* Specify library files to be included in the compilation. */,
+		"lib": ["ES2019", "DOM"] /* Specify library files to be included in the compilation. */,
 		"strict": true /* Enable all strict type-checking options. */
 	}
 }
