@@ -25,21 +25,14 @@
  * @property {(renderFn: RenderFn) => string} registerChild
  * @property {() => void} invalidate
  * @property {(key: string, callback: () => any) => void} registerHook
- * @property {(key: Object, callback: (e: KeyboardEvent) => any, options: RegisterInputOptions) => string} registerInput
- */
-
-/**
- * @typedef {Object} RegisterInputOptions
- * @property {boolean=} multiline
- * @property {(focus: boolean) => any=} onFocusChange
+ * @property {(key: Object, callback: (activeFocus: Object) => any) => string} registerFocus
+ * @property {(key: Object) => void} giveFocusTo
  */
 
 /**
  * @param {string|HTMLElement} selectorOrEl
- * @param {Object} options
- * @param {string} options.fontFamily Defaults to "monospace, monospace", REALLY should be monospace
  */
-export default async function literal(selectorOrEl, { fontFamily = "monospace, monospace" } = {}) {
+export default async function literal(selectorOrEl) {
 	/** @type {HTMLElement} */
 	const el = typeof selectorOrEl == "string" ? document.querySelector(selectorOrEl) : selectorOrEl
 	if (!el || !el instanceof HTMLElement) throw new Error(`Invalid element or css selector supplied`)
@@ -55,7 +48,7 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 			height: auto;
 			margin: 0;
 			padding: 0;
-			font-family: ${fontFamily};
+			font-family: monospace, monospace;
 			position: relative;
 			user-select: none;
 			top: 50%;
@@ -66,13 +59,12 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 			position: absolute;
 			width: auto;
 			height: auto;
-			font-family: ${fontFamily};
+			font-family: monospace, monospace;
 			top: 0px;
 			left: 0px;
 		}`
 	document.head.appendChild(styles)
 
-	// TODO: re-render on resize
 	const pre = document.createElement("pre")
 	pre.id = "lit-" + id
 	el.appendChild(pre)
@@ -109,19 +101,20 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 	let cache
 
 	/** @type {Map<Object, string>} */
-	const inputs = new Map()
+	const focuses = new Map()
 
 	/** @type {Object} */
-	let activeInput
+	let activeFocus
 
 	// TODO: less naive implementation
 	document.addEventListener("keydown", e => {
+		e.preventDefault()
 		if (e.key == "Tab") {
-			const keys = Array.from(inputs.keys())
-			const i = keys.indexOf(activeInput)
-			if (i == -1 || i == keys.length - 1) activeInput = keys[0]
-			else activeInput = keys[i + 1]
-			if (cache) triggerRecursively(cache, "focuschange")
+			const keys = Array.from(focuses.keys())
+			const i = keys.indexOf(activeFocus)
+			if (i == -1 || i == keys.length - 1) activeFocus = keys[0]
+			else activeFocus = keys[i + 1]
+			if (cache) triggerRecursively(cache, "focuschange", activeFocus)
 		}
 		if (cache) triggerRecursively(cache, "keydown", e)
 	})
@@ -148,28 +141,17 @@ export default async function literal(selectorOrEl, { fontFamily = "monospace, m
 				scheduleRender()
 			},
 			registerHook: (key, callback) => addHook(component, key, callback),
-			registerInput(key, callback, { onFocusChange, multiline = false } = {}) {
-				let inputText = inputs.get(key) ?? ""
-				if (!inputText) inputs.set(key, "")
-				if (!activeInput) activeInput = key
-				onFocusChange?.(activeInput == key)
-				onFocusChange && addHook(component, "focuschange", () => onFocusChange(activeInput == key))
-				addHook(
-					component,
-					"keydown",
-					/** @param {KeyboardEvent} e */
-					e => {
-						if (activeInput != key) return
-						e.preventDefault()
-						// TODO: do that properly lol
-						if (e.key.length == 1) inputText += e.key
-						else if (e.key == "Backspace") inputText = inputText.slice(0, -1)
-						else if (e.key == "Enter" && multiline) inputText += "\n"
-						callback(e)
-						inputs.set(key, inputText)
-					},
-				)
-				return inputText
+			registerFocus(key, callback) {
+				if (!focuses.has(key)) focuses.set(key, "")
+				if (!activeFocus) activeFocus = key
+				callback(activeFocus)
+				addHook(component, "focuschange", callback)
+				return focuses.get(key)
+			},
+			giveFocusTo(key) {
+				if (key == activeFocus) return
+				activeFocus = key
+				triggerRecursively(cache, "focuschange", activeFocus)
 			},
 		}
 	}
